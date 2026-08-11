@@ -105,9 +105,11 @@ psql -d postgres -c "CREATE DATABASE desarrollo_software_1 OWNER root;"
 
 ### 2. API
 
+Creá el archivo `api/.env` con el contenido de la sección
+[Variables de entorno](#variables-de-entorno-apienv) y luego:
+
 ```bash
 cd api
-cp .env.example .env
 npm install
 npm start          # http://localhost:3001/api
 ```
