@@ -12,3 +12,6 @@ dist/
 
 # Enunciado y rúbrica de la evaluación (material del instituto)
 *.pdf
+
+# Carpeta de armado de la entrega (no va al repo)
+Entrega/
