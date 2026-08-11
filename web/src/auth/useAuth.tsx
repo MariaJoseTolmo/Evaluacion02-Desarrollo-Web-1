@@ -18,6 +18,8 @@ type AuthContextValue = {
   loading: boolean;
   login: (credentials: Credentials) => Promise<void>;
   register: (input: Credentials & { nombre: string }) => Promise<void>;
+  /** Refreshes the session after the profile is edited. */
+  setUser: (user: AuthUser) => void;
   logout: () => void;
 };
 
@@ -51,6 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       login: (credentials) => authenticate('/auth/login', credentials),
       register: (input) => authenticate('/auth/register', input),
+      setUser,
       logout: () => {
         token.clear();
         setUser(null);

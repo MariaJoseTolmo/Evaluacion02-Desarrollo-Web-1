@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Login from './auth/Login';
 import Register from './auth/Register';
+import Profile from './auth/Profile';
 import Projects from './projects/Projects';
 import { useAuth } from './auth/useAuth';
 
@@ -21,6 +22,14 @@ export default function App() {
         element={
           <RequireAuth>
             <Projects />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/perfil"
+        element={
+          <RequireAuth>
+            <Profile />
           </RequireAuth>
         }
       />

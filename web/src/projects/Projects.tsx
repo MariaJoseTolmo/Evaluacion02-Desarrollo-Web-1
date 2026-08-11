@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth/useAuth';
 
@@ -104,9 +105,18 @@ export default function Projects() {
             Sesión de {user?.nombre}
           </small>
         </div>
-        <button className="btn btn-outline-secondary btn-sm" onClick={logout}>
-          Cerrar sesión
-        </button>
+        <div className="d-flex gap-2">
+          <Link to="/perfil" className="btn btn-outline-primary btn-sm">
+            Mi perfil
+          </Link>
+          <button
+            type="button"
+            className="btn btn-outline-secondary btn-sm"
+            onClick={logout}
+          >
+            Cerrar sesión
+          </button>
+        </div>
       </header>
 
       {error && (
