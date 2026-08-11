@@ -152,4 +152,88 @@ assert.equal(
   204,
 );
 
+// 11. A user can edit their own profile.
+const nuevoCorreo = `editado.${Date.now()}@techsolutions.cl`;
+const profile = await call('/users/me', {
+  method: 'PATCH',
+  token,
+  body: { nombre: 'Nombre Editado', correo: nuevoCorreo },
+});
+assert.equal(profile.status, 200, `edit profile: ${JSON.stringify(profile.body)}`);
+assert.equal(profile.body.nombre, 'Nombre Editado');
+assert.equal(profile.body.correo, nuevoCorreo);
+assert.equal(profile.body.clave, undefined, 'password hash must not be returned');
+
+// Editing the profile requires a token.
+assert.equal(
+  (await call('/users/me', { method: 'PATCH', body: { nombre: 'Anónimo' } })).status,
+  401,
+  'profile edit should require authentication',
+);
+
+// The new email cannot collide with another account.
+assert.equal(
+  (await call('/users/me', {
+    method: 'PATCH',
+    token,
+    body: { correo: other.body.user.correo },
+  })).status,
+  409,
+  'duplicate email should conflict',
+);
+
+// 12. Changing the password requires the current one.
+assert.equal(
+  (await call('/users/me', {
+    method: 'PATCH',
+    token,
+    body: { claveNueva: 'OtraClave456', claveActual: 'EstaNoEs123' },
+  })).status,
+  401,
+  'wrong current password must be rejected',
+);
+assert.equal(
+  (await call('/users/me', { method: 'PATCH', token, body: { claveNueva: 'OtraClave456' } }))
+    .status,
+  400,
+  'changing the password without the current one must be rejected',
+);
+
+const claveNueva = 'OtraClave456';
+assert.equal(
+  (await call('/users/me', {
+    method: 'PATCH',
+    token,
+    body: { claveNueva, claveActual: clave },
+  })).status,
+  200,
+  'correct current password should allow the change',
+);
+
+// 13. The new password works, the old one no longer does, and it is hashed.
+assert.equal(
+  (await call('/auth/login', { method: 'POST', body: { correo: nuevoCorreo, clave } })).status,
+  401,
+  'the old password must stop working',
+);
+assert.equal(
+  (await call('/auth/login', { method: 'POST', body: { correo: nuevoCorreo, clave: claveNueva } }))
+    .status,
+  200,
+  'the new password should work',
+);
+
+const db2 = new Client({
+  host: 'localhost',
+  port: 5432,
+  user: 'root',
+  password: 'desarrollo_software_1',
+  database: 'desarrollo_software_1',
+});
+await db2.connect();
+const updated = await db2.query('SELECT clave FROM usuarios WHERE correo = $1', [nuevoCorreo]);
+await db2.end();
+assert.notEqual(updated.rows[0].clave, claveNueva, 'new password must not be plain text');
+assert.match(updated.rows[0].clave, /^\$2[aby]\$\d{2}\$/, 'new password must be a bcrypt hash');
+
 console.log('✅ Todas las verificaciones pasaron.');

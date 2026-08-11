@@ -4,6 +4,7 @@ import { config } from './config';
 import { User } from './users/user.entity';
 import { Project } from './projects/project.entity';
 import { AuthModule } from './auth/auth.module';
+import { UsersModule } from './users/users.module';
 import { ProjectsModule } from './projects/projects.module';
 
 @Module({
@@ -14,6 +15,7 @@ import { ProjectsModule } from './projects/projects.module';
       entities: [User, Project],
     }),
     AuthModule,
+    UsersModule,
     ProjectsModule,
   ],
 })
