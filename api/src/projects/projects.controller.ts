@@ -7,6 +7,7 @@ import {
   NotFoundException,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Req,
   UseGuards,
@@ -14,7 +15,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Project } from './project.entity';
-import { CreateProjectDto } from './project.dto';
+import { CreateProjectDto, UpdateProjectDto } from './project.dto';
 import { AuthedRequest, JwtAuthGuard } from '../auth/jwt-auth.guard';
 
 /**
@@ -41,6 +42,22 @@ export class ProjectsController {
     return this.projects.save(
       this.projects.create({ ...dto, createdById: req.user.id }),
     );
+  }
+
+  @Patch(':id')
+  async update(
+    @Req() req: AuthedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateProjectDto,
+  ) {
+    // Scoped by owner so one user cannot edit another's project.
+    const project = await this.projects.findOneBy({
+      id,
+      createdById: req.user.id,
+    });
+    if (!project) throw new NotFoundException('Proyecto no encontrado');
+
+    return this.projects.save(Object.assign(project, dto));
   }
 
   @Delete(':id')

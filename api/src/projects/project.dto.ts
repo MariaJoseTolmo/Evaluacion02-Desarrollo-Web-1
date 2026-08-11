@@ -9,6 +9,7 @@ import {
   MinLength,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { PartialType } from '@nestjs/mapped-types';
 import { ProjectStatus } from './project.entity';
 
 export class CreateProjectDto {
@@ -35,3 +36,9 @@ export class CreateProjectDto {
   @Min(0)
   monto: number;
 }
+
+/**
+ * Same rules as creation, every field optional. Derived rather than duplicated
+ * so the two can never drift apart.
+ */
+export class UpdateProjectDto extends PartialType(CreateProjectDto) {}

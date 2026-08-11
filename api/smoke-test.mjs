@@ -103,7 +103,28 @@ assert.equal(list.status, 200);
 assert.equal(list.body.length, 1, 'list should be scoped to the owner');
 assert.equal(list.body[0].createdById, login.body.user.id, 'created_by must be the user id');
 
-// 8. Another user cannot see or delete those projects.
+// 8. The owner can edit a project, patching only the fields sent.
+const edited = await call(`/projects/${created.body.id}`, {
+  method: 'PATCH',
+  token,
+  body: { estado: 'completado', monto: 16000000 },
+});
+assert.equal(edited.status, 200, `edit project: ${JSON.stringify(edited.body)}`);
+assert.equal(edited.body.estado, 'completado');
+assert.equal(edited.body.monto, 16000000);
+assert.equal(edited.body.nombre, 'Migración ERP', 'untouched fields must survive');
+
+assert.equal(
+  (await call(`/projects/${created.body.id}`, {
+    method: 'PATCH',
+    token,
+    body: { estado: 'inexistente' },
+  })).status,
+  400,
+  'invalid estado should be rejected',
+);
+
+// 9. Another user cannot see, edit or delete those projects.
 const other = await call('/auth/register', {
   method: 'POST',
   body: { nombre: 'Intruso', correo: `intruso.${Date.now()}@techsolutions.cl`, clave },
@@ -111,12 +132,21 @@ const other = await call('/auth/register', {
 const otherToken = other.body.access_token;
 assert.equal((await call('/projects', { token: otherToken })).body.length, 0);
 assert.equal(
+  (await call(`/projects/${created.body.id}`, {
+    method: 'PATCH',
+    token: otherToken,
+    body: { nombre: 'Secuestrado' },
+  })).status,
+  404,
+  'another user must not edit this project',
+);
+assert.equal(
   (await call(`/projects/${created.body.id}`, { method: 'DELETE', token: otherToken })).status,
   404,
   'another user must not delete this project',
 );
 
-// 9. The owner can delete it.
+// 10. The owner can delete it.
 assert.equal(
   (await call(`/projects/${created.body.id}`, { method: 'DELETE', token })).status,
   204,
