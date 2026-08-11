@@ -15,6 +15,119 @@ API REST con **NestJS + TypeORM + PostgreSQL** y SPA con **React + Bootstrap**.
 | Validación| class-validator (en el borde: DTOs del handler)        |
 | Frontend  | React 19, Vite, React Router, Bootstrap 5              |
 
+## Por qué este stack
+
+**La razón principal es que es el stack en el que tengo más experiencia, y eso me
+permite revisar el código que emite la IA.**
+
+Esa frase merece desarrollarse, porque no es una preferencia de comodidad sino
+una decisión de control de calidad.
+
+Cuando parte del código lo genera una IA, el cuello de botella deja de ser
+escribirlo y pasa a ser **validarlo**. Una IA produce código que casi siempre
+compila, casi siempre corre y casi siempre parece correcto. El problema son los
+casos en que "casi" no alcanza: un `findOne` que devuelve la contraseña porque
+nadie recordó que la columna estaba marcada como `select: false`, una
+verificación de propietario que se olvidó en el endpoint de edición, un
+`ValidationPipe` sin `whitelist` que deja pasar campos que nunca debieron
+llegar. Ninguno de esos errores rompe la aplicación. Todos se ven bien en una
+lectura superficial.
+
+Detectarlos exige conocer el framework lo suficiente como para distinguir lo
+**idiomático** de lo que simplemente **parece plausible**. En un stack que no
+domino, no tendría cómo hacer esa distinción: cualquier cosa que arranque sin
+errores se vería igual de correcta, y la IA pasaría de ser una herramienta que
+dirijo a ser un oráculo que tengo que creer. Elegir tecnologías que conozco
+convierte la revisión en algo que efectivamente puedo hacer, y mantiene la
+decisión técnica del lado humano.
+
+Sobre esa base, cada pieza aporta algo concreto:
+
+- **NestJS** es opinado. Módulos, inyección de dependencias y decoradores
+  imponen una forma de estructurar el código, así que las desviaciones se notan
+  al leer. Además, buena parte de los errores de cableado explotan al arrancar
+  la aplicación en vez de manifestarse en producción.
+- **TypeORM** deja el esquema declarado en las entidades. La estructura de la
+  base es código revisable en el mismo diff que el resto, no un estado invisible
+  del servidor.
+- **PostgreSQL** permite mover reglas a la base: el `UNIQUE` sobre el correo y la
+  clave foránea de `created_by` se cumplen aunque la capa de aplicación tenga un
+  error. Una restricción declarada en el motor no depende de que alguien se
+  acuerde de validarla.
+- **TypeScript de punta a punta** hace que un cambio de forma en la API rompa la
+  compilación del frontend, en vez de romperse recién en el navegador.
+- **Bootstrap** evita escribir CSS desde cero. La rúbrica evalúa persistencia,
+  autenticación y cifrado; el tiempo que no se va en estilos se invierte en lo
+  que efectivamente se corrige.
+
+## Por qué esta arquitectura, y por qué no hexagonal
+
+**La aplicación tiene sólo dos dominios —usuarios y proyectos—, y con ese tamaño
+una arquitectura hexagonal no la haría más mantenible.**
+
+Vale la pena explicar el razonamiento, porque la conclusión suele leerse como un
+atajo y no lo es.
+
+La arquitectura hexagonal, o de puertos y adaptadores, resuelve problemas
+reales, pero problemas específicos: aislar la lógica de negocio cuando hay que
+poder cambiar la infraestructura sin tocarla, sostener varios mecanismos de
+entrada o de persistencia en paralelo, permitir que un equipo grande trabaje
+sobre capas separadas sin pisarse, o proteger reglas de negocio complejas de los
+vaivenes de un framework a lo largo de años.
+
+Nada de eso describe este proyecto. Hay **una** base de datos y no está previsto
+que haya otra. Hay **un** mecanismo de entrega, que es HTTP. La lógica de negocio
+se reduce a cifrar y verificar credenciales, emitir y validar un JWT, y hacer
+altas, bajas, modificaciones y consultas acotadas por propietario.
+
+Aplicar el patrón igual tendría un costo concreto y verificable:
+
+- Interfaces con **una sola implementación**, que no abstraen nada porque no hay
+  una segunda opción de la cual abstraerse.
+- **Mappers** entre la entidad de dominio y la de persistencia, que serían
+  copias campo a campo.
+- **Casos de uso** envolviendo una única llamada al repositorio, agregando un
+  salto de archivo entre la ruta y la consulta.
+
+El resultado no sería un sistema más mantenible sino más código para leer, sin
+comportamiento adicional. Y conviene ser preciso con qué significa mantenible:
+es **cuánto tarda alguien en entender el sistema y cambiarlo sin romperlo**. Con
+dos dominios, tres carpetas de indirección no aceleran ese trabajo, lo demoran.
+La complejidad estructural sólo se paga cuando compra algo; acá no compraría
+nada.
+
+Por eso la organización es **por feature**, con las capas mínimas que el problema
+justifica: la ruta valida en el borde, y si hay lógica no trivial la delega en
+una función de negocio; si no la hay, habla directamente con el ORM. Por eso
+`ProjectsController` usa el repositorio de TypeORM sin intermediarios —es CRUD
+puro— mientras que `UsersService` sí existe, porque verificar la clave actual,
+volver a cifrarla y manejar el correo duplicado sí es lógica que merece vivir
+aparte del transporte HTTP.
+
+Conviene aclarar algo que suele confundirse: **SOLID no exige arquitectura
+hexagonal**. SOLID habla de responsabilidades acotadas y de la dirección de las
+dependencias, y ambas cosas se cumplen acá mediante el contenedor de inyección
+de NestJS, sin necesidad de una capa de puertos. La sección
+[SOLID aplicado](#solid-aplicado) detalla dónde se ve cada principio.
+
+### Cuándo habría que reconsiderarlo
+
+Esta decisión está atada al tamaño actual, así que corresponde dejar escrito qué
+la invalidaría:
+
+- Que aparezca un **tercer o cuarto dominio** con reglas que crucen entre sí.
+- Que haga falta un **segundo backend de datos** —una caché, un servicio externo,
+  un motor de búsqueda— y con él una razón real para abstraer la persistencia.
+- Que la lógica de negocio **exceda lo que entra cómodo en un handler** y empiece
+  a repetirse entre features.
+- Que el proyecto pase a ser mantenido por **varias personas en paralelo** sobre
+  las mismas áreas.
+
+Mientras tanto, la organización por feature deja abierto el camino: como cada
+dominio ya vive aislado en su carpeta, introducir capas adicionales el día que
+se justifique es un cambio contenido en esa carpeta y no una reescritura del
+proyecto.
+
 ## Estructura
 
 Organización **por feature**, no por tipo técnico. Cada carpeta contiene todo lo
@@ -60,7 +173,10 @@ eva02/
             └── Projects.tsx    # Listado, alta y edición, protegido por JWT
 ```
 
-### Decisiones de arquitectura
+### Decisiones concretas
+
+Resumen puntual de cómo se aplica el razonamiento de
+[Por qué esta arquitectura](#por-qué-esta-arquitectura-y-por-qué-no-hexagonal):
 
 - **Sin capa `repository` propia.** Hay un solo backend de datos, así que los
   handlers usan el `Repository<T>` de TypeORM directamente. Una interfaz con una
