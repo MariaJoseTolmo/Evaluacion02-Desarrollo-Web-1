@@ -38,6 +38,7 @@ export default function Projects() {
   const { user, logout } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [form, setForm] = useState(emptyForm);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -46,16 +47,39 @@ export default function Projects() {
       .catch((err) => setError((err as Error).message));
   }, []);
 
-  async function handleCreate(event: FormEvent) {
+  function startEdit(project: Project) {
+    setEditingId(project.id);
+    setForm({
+      nombre: project.nombre,
+      fechaInicio: project.fechaInicio,
+      estado: project.estado,
+      responsable: project.responsable,
+      monto: String(project.monto),
+    });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setForm(emptyForm);
+  }
+
+  /** One form serves both create and edit; `editingId` picks the verb. */
+  async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     setError('');
+    const body = { ...form, monto: Number(form.monto) };
     try {
-      const created = await api<Project>('/projects', {
-        method: 'POST',
-        body: { ...form, monto: Number(form.monto) },
-      });
-      setProjects([created, ...projects]);
-      setForm(emptyForm);
+      if (editingId === null) {
+        const created = await api<Project>('/projects', { method: 'POST', body });
+        setProjects([created, ...projects]);
+      } else {
+        const updated = await api<Project>(`/projects/${editingId}`, {
+          method: 'PATCH',
+          body,
+        });
+        setProjects(projects.map((p) => (p.id === editingId ? updated : p)));
+      }
+      cancelEdit();
     } catch (err) {
       setError((err as Error).message);
     }
@@ -93,8 +117,10 @@ export default function Projects() {
 
       <div className="card shadow-sm mb-4">
         <div className="card-body">
-          <h2 className="h6 mb-3">Nuevo proyecto</h2>
-          <form className="row g-2 align-items-end" onSubmit={handleCreate}>
+          <h2 className="h6 mb-3">
+            {editingId === null ? 'Nuevo proyecto' : 'Editar proyecto'}
+          </h2>
+          <form className="row g-2 align-items-end" onSubmit={handleSubmit}>
             <div className="col-12 col-md-3">
               <label htmlFor="p-nombre" className="form-label small">
                 Nombre
@@ -168,10 +194,19 @@ export default function Projects() {
                 onChange={(e) => setForm({ ...form, monto: e.target.value })}
               />
             </div>
-            <div className="col-12 col-md-1 d-grid">
+            <div className="col-12 col-md-1 d-grid gap-1">
               <button className="btn btn-primary" type="submit">
-                Crear
+                {editingId === null ? 'Crear' : 'Guardar'}
               </button>
+              {editingId !== null && (
+                <button
+                  className="btn btn-link btn-sm p-0"
+                  type="button"
+                  onClick={cancelEdit}
+                >
+                  Cancelar
+                </button>
+              )}
             </div>
           </form>
         </div>
@@ -212,6 +247,15 @@ export default function Projects() {
                 <td className="text-end">{money.format(project.monto)}</td>
                 <td className="text-end">
                   <button
+                    type="button"
+                    className="btn btn-sm btn-outline-primary me-1"
+                    onClick={() => startEdit(project)}
+                    aria-label={`Editar ${project.nombre}`}
+                  >
+                    Editar
+                  </button>
+                  <button
+                    type="button"
                     className="btn btn-sm btn-outline-danger"
                     onClick={() => handleDelete(project.id)}
                     aria-label={`Eliminar ${project.nombre}`}
