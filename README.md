@@ -31,7 +31,11 @@ eva02/
 │       ├── app.module.ts
 │       ├── main.ts
 │       ├── users/
-│       │   └── user.entity.ts
+│       │   ├── user.entity.ts
+│       │   ├── user.dto.ts
+│       │   ├── users.controller.ts  # Edición del perfil propio
+│       │   ├── users.service.ts     # Verifica la clave actual y la recifra
+│       │   └── users.module.ts
 │       ├── auth/
 │       │   ├── auth.controller.ts   # Rutas: register, login, me
 │       │   ├── auth.service.ts      # Hash, verificación, emisión de JWT
@@ -50,9 +54,10 @@ eva02/
         ├── auth/
         │   ├── useAuth.tsx     # Estado de sesión
         │   ├── Login.tsx       # Vista de Inicio de Sesión
-        │   └── Register.tsx    # Vista de Registro
+        │   ├── Register.tsx    # Vista de Registro
+        │   └── Profile.tsx     # Vista de edición de perfil
         └── projects/
-            └── Projects.tsx    # Vista protegida por JWT
+            └── Projects.tsx    # Listado, alta y edición, protegido por JWT
 ```
 
 ### Decisiones de arquitectura
@@ -167,8 +172,10 @@ BCRYPT_ROUNDS=10
 | `POST`   | `/api/auth/register` | —    | Registro; cifra la clave y emite JWT |
 | `POST`   | `/api/auth/login`    | —    | Devuelve JWT si las credenciales son válidas |
 | `GET`    | `/api/auth/me`       | JWT  | Usuario de la sesión actual          |
+| `PATCH`  | `/api/users/me`      | JWT  | Edita nombre, correo y clave propios |
 | `GET`    | `/api/projects`      | JWT  | Proyectos del usuario autenticado    |
 | `POST`   | `/api/projects`      | JWT  | Crea un proyecto                     |
+| `PATCH`  | `/api/projects/:id`  | JWT  | Edita un proyecto propio             |
 | `DELETE` | `/api/projects/:id`  | JWT  | Elimina un proyecto propio           |
 
 ## Seguridad
@@ -182,8 +189,12 @@ BCRYPT_ROUNDS=10
   hash dummy, para no filtrar qué correos están registrados.
 - **Correo único a nivel de base**: el registro confía en la restricción UNIQUE en
   vez de un "consultar y después insertar", que tiene condición de carrera.
-- **Aislamiento por dueño**: listar y eliminar proyectos filtran por `created_by`,
-  así un usuario no puede tocar los de otro.
+- **Aislamiento por dueño**: listar, editar y eliminar proyectos filtran por
+  `created_by`, así un usuario no puede tocar los de otro.
+- **Edición del perfil acotada a uno mismo**: `PATCH /api/users/me` toma el id del
+  token verificado, no de la URL, así que no hay forma de apuntar a otra cuenta.
+- **Cambio de clave con reautenticación**: para cambiarla hay que enviar la
+  actual. Un token robado por sí solo no alcanza para secuestrar la cuenta.
 
 ## Verificación
 
@@ -196,4 +207,6 @@ npm test
 
 Cubre: registro, hash bcrypt real en la base, correo duplicado (409), login
 correcto e incorrecto, rechazo sin token y con token inválido, validación de
-input (400), creación y listado de proyectos, y aislamiento entre usuarios.
+input (400), creación, listado y edición parcial de proyectos, aislamiento entre
+usuarios, edición del perfil, y cambio de clave con verificación de la actual
+(incluyendo que la clave vieja deje de servir y que la nueva quede cifrada).
