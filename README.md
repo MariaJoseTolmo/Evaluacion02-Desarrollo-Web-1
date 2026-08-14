@@ -17,48 +17,196 @@ API REST con **NestJS + TypeORM + PostgreSQL** y SPA con **React + Bootstrap**.
 
 ## Por qué este stack
 
-**La razón principal es que es el stack en el que tengo más experiencia, y eso me
-permite revisar el código que emite la IA.**
+El criterio que ordena todas las elecciones es el mismo: **cada garantía se
+declara en el punto donde el sistema puede verificarla solo**, en vez de
+depender de que alguien se acuerde de sostenerla. El compilador, el motor de
+base de datos y el contenedor son mecanismos que fallan solos y a tiempo; la
+disciplina humana no lo es. Lo que sigue detalla, tecnología por tecnología, qué
+mecanismo concreto aporta cada una.
 
-Esa frase merece desarrollarse, porque no es una preferencia de comodidad sino
-una decisión de control de calidad.
+### NestJS sobre Express solo
 
-Cuando parte del código lo genera una IA, el cuello de botella deja de ser
-escribirlo y pasa a ser **validarlo**. Una IA produce código que casi siempre
-compila, casi siempre corre y casi siempre parece correcto. El problema son los
-casos en que "casi" no alcanza: un `findOne` que devuelve la contraseña porque
-nadie recordó que la columna estaba marcada como `select: false`, una
-verificación de propietario que se olvidó en el endpoint de edición, un
-`ValidationPipe` sin `whitelist` que deja pasar campos que nunca debieron
-llegar. Ninguno de esos errores rompe la aplicación. Todos se ven bien en una
-lectura superficial.
+Express resuelve enrutamiento y middleware, y nada más. Todo lo demás —cómo se
+construyen las dependencias, dónde viven las preocupaciones transversales, cómo
+se propagan los errores— queda como convención no verificada. NestJS aporta tres
+mecanismos que este proyecto usa de forma directa:
 
-Detectarlos exige conocer el framework lo suficiente como para distinguir lo
-**idiomático** de lo que simplemente **parece plausible**. En un stack que no
-domino, no tendría cómo hacer esa distinción: cualquier cosa que arranque sin
-errores se vería igual de correcta, y la IA pasaría de ser una herramienta que
-dirijo a ser un oráculo que tengo que creer. Elegir tecnologías que conozco
-convierte la revisión en algo que efectivamente puedo hacer, y mantiene la
-decisión técnica del lado humano.
+- **Contenedor de inyección de dependencias con resolución en el arranque.** Las
+  dependencias se declaran en el constructor y las resuelve el contenedor. Si un
+  proveedor falta o un módulo no exporta lo que otro importa, la aplicación
+  **no levanta**: falla en el `bootstrap` con la cadena de dependencias exacta.
+  Ese error no puede llegar a producción, porque impide arrancar. Con
+  instanciación manual, el mismo defecto se manifiesta como un `undefined` en la
+  primera petición que toque ese camino.
+- **Guards, pipes y filtros como ciudadanos de primera clase.** La autenticación
+  vive en `JwtAuthGuard` y se aplica con `@UseGuards()` a nivel de controlador,
+  de modo que **cubre todas las rutas del controlador por defecto**. Agregar un
+  endpoint nuevo a `ProjectsController` lo deja protegido sin hacer nada. Con
+  middleware de Express montado por ruta, cada endpoint nuevo es una oportunidad
+  de olvidarse, y el olvido no produce ningún error visible: produce una ruta
+  abierta.
+- **Metadatos de decoradores en tiempo de ejecución.** Con
+  `emitDecoratorMetadata` y `reflect-metadata`, Nest lee los tipos de los
+  parámetros del handler y puede instanciar y validar el DTO correspondiente sin
+  configuración adicional. Es lo que permite que la validación se declare una
+  sola vez, en la clase del DTO.
 
-Sobre esa base, cada pieza aporta algo concreto:
+Nest corre **sobre** Express (`@nestjs/platform-express`), así que no se
+renuncia ni al rendimiento ni al ecosistema de middleware: se agrega estructura
+sobre la misma base.
 
-- **NestJS** es opinado. Módulos, inyección de dependencias y decoradores
-  imponen una forma de estructurar el código, así que las desviaciones se notan
-  al leer. Además, buena parte de los errores de cableado explotan al arrancar
-  la aplicación en vez de manifestarse en producción.
-- **TypeORM** deja el esquema declarado en las entidades. La estructura de la
-  base es código revisable en el mismo diff que el resto, no un estado invisible
-  del servidor.
-- **PostgreSQL** permite mover reglas a la base: el `UNIQUE` sobre el correo y la
-  clave foránea de `created_by` se cumplen aunque la capa de aplicación tenga un
-  error. Una restricción declarada en el motor no depende de que alguien se
-  acuerde de validarla.
-- **TypeScript de punta a punta** hace que un cambio de forma en la API rompa la
-  compilación del frontend, en vez de romperse recién en el navegador.
-- **Bootstrap** evita escribir CSS desde cero. La rúbrica evalúa persistencia,
-  autenticación y cifrado; el tiempo que no se va en estilos se invierte en lo
-  que efectivamente se corrige.
+### TypeScript de punta a punta
+
+El beneficio concreto es que **el contrato de la API se verifica en tiempo de
+compilación en los dos lados**. Si cambia la forma de una respuesta, el consumo
+en el frontend deja de compilar; sin tipos, el mismo cambio se descubre como un
+`undefined` en el navegador, en ejecución y solo si alguien recorre esa pantalla.
+
+Además, el compilador es requisito técnico del resto del stack: el sistema de
+decoradores de Nest y de TypeORM depende de la emisión de metadatos de tipos, que
+solo existe compilando TypeScript.
+
+### TypeORM
+
+- **El esquema es código.** Las entidades declaran tablas, tipos, longitudes,
+  índices y relaciones. La estructura de la base se revisa en el mismo diff que
+  la lógica, en vez de ser un estado invisible del servidor que alguien modificó
+  con un cliente gráfico.
+- **Patrón Data Mapper.** La entidad no arrastra la lógica de persistencia
+  encima, a diferencia de Active Record. Eso permite que un controlador pida un
+  `Repository<Project>` por inyección y que la entidad quede como una
+  declaración de forma, sin comportamiento acoplado a la base.
+- **`select: false` a nivel de columna.** En `User.clave`, el hash queda excluido
+  de todo `find` que no lo pida explícitamente. La protección es el
+  comportamiento por defecto del ORM y no una decisión que haya que repetir en
+  cada consulta.
+- **Transformers de columna.** PostgreSQL devuelve `numeric` como *string* para
+  no perder precisión. La entidad `Project` declara un transformer que convierte
+  a `number` al leer, de modo que la conversión ocurre en un solo lugar y no
+  dispersa por cada consumidor del campo `monto`.
+- **`synchronize` en desarrollo.** Deriva el esquema de las entidades al
+  arrancar, lo que elimina el paso manual de creación de tablas al clonar el
+  proyecto. Es una elección apropiada para esta etapa; un despliegue real usaría
+  migraciones versionadas.
+
+### PostgreSQL
+
+Es el motor que permite mover invariantes al lugar donde **no se pueden violar
+desde la aplicación**:
+
+- **`UNIQUE` sobre `correo`.** El registro no consulta antes de insertar: intenta
+  insertar y captura el código de error **`23505`**. Esto no es un detalle de
+  estilo, es corrección: un patrón "consultar y después insertar" tiene una
+  condición de carrera entre ambas operaciones, y dos registros simultáneos con
+  el mismo correo pueden pasar los dos. La restricción del motor es atómica y no
+  admite esa ventana.
+- **Clave foránea con `ON DELETE CASCADE`** en `created_by`. La integridad
+  referencial la garantiza el motor: no pueden existir proyectos huérfanos aunque
+  la aplicación tenga un error.
+- **Tipo `ENUM` nativo** para `estado`. Los valores válidos son parte del
+  esquema, no una convención documentada.
+- **`NUMERIC(14,2)` para `monto`.** Decimal exacto, no coma flotante binaria.
+  `FLOAT` y `DOUBLE` no pueden representar exactamente valores como `0.1`, y los
+  errores se acumulan al operar sobre montos. Para cualquier campo de dinero,
+  `NUMERIC` es la elección correcta y no una preferencia.
+- **DDL transaccional.** A diferencia de otros motores, los cambios de esquema
+  ocurren dentro de una transacción: si una sincronización falla a la mitad, no
+  queda un esquema parcialmente aplicado.
+
+### bcrypt para las claves
+
+La elección de bcrypt sobre un hash de propósito general —SHA-256, MD5— responde
+a que **son herramientas para problemas distintos**. SHA está diseñado para ser
+rápido, que es exactamente la propiedad que no se quiere al almacenar
+credenciales: la velocidad favorece al atacante que prueba millones de
+combinaciones por segundo contra una base filtrada.
+
+bcrypt aporta dos mecanismos específicos:
+
+- **Factor de costo configurable** (`BCRYPT_ROUNDS`, aquí 10). El trabajo es
+  exponencial en ese parámetro, así que el algoritmo se puede encarecer a medida
+  que el hardware mejora, sin cambiar de tecnología.
+- **Salt único por hash, embebido en el resultado.** El formato
+  `$2b$10$<salt><hash>` guarda el costo y la sal junto al digest. Dos usuarios
+  con la misma clave producen hashes distintos, lo que anula las tablas
+  precalculadas, y no hace falta una columna aparte para la sal.
+
+### JWT para la sesión
+
+El frontend es una SPA servida desde un origen distinto al de la API. Un JWT
+firmado permite **verificar la sesión sin estado compartido**: la API valida la
+firma con su secreto y no necesita consultar un almacén de sesiones en cada
+petición. Eso elimina un componente de infraestructura y hace que la API sea
+horizontalmente escalable por construcción.
+
+### class-validator y `ValidationPipe`
+
+La validación se declara una vez, en el DTO, y se aplica de forma global. Dos
+opciones concretas hacen el trabajo pesado:
+
+- **`whitelist: true`** descarta cualquier propiedad no declarada en el DTO. Esto
+  previene *mass assignment*: aunque el cuerpo de la petición traiga campos de
+  más, no llegan a la entidad.
+- **`forbidNonWhitelisted: true`** además rechaza esas peticiones con `400` en
+  vez de ignorarlas en silencio, así un cliente mal construido falla de forma
+  ruidosa y temprana.
+
+### React con Vite
+
+Vite sirve los módulos como **ESM nativo** en desarrollo, sin empaquetar todo el
+árbol en cada cambio, y pre-empaqueta las dependencias con esbuild. El resultado
+práctico es arranque en frío por debajo del segundo y recarga en caliente
+inmediata.
+
+El `server.proxy` de Vite reenvía `/api` al backend, de modo que en desarrollo el
+navegador ve **un solo origen**. Eso elimina las peticiones *preflight* de CORS
+del circuito de trabajo y hace que las rutas relativas del cliente funcionen sin
+configuración distinta entre desarrollo y producción.
+
+### Bootstrap
+
+Aporta componentes ya construidos y **accesibles**: manejo de foco, roles ARIA y
+contraste resueltos por la librería. Escribir esos mismos componentes a mano no
+es solo más lento, es más propenso a producir formularios que un lector de
+pantalla no puede recorrer. Como se consume compilado desde npm, tampoco agrega
+un paso de compilación de estilos al proyecto.
+
+### Docker para la base de datos
+
+Es la pieza que garantiza que **la base sea idéntica en cualquier máquina**, y en
+este proyecto se justificó en la práctica.
+
+- **Versión fijada.** `postgres:16-alpine` clava el motor. No depende de qué
+  versión tenga instalada quien clone el repositorio, y evita diferencias de
+  comportamiento entre versiones mayores.
+- **Las credenciales que exige el enunciado, declaradas en el compose.** La base
+  `desarrollo_software_1`, el usuario `root` y su clave se crean al primer
+  arranque del contenedor. Reproducir eso sobre un PostgreSQL instalado en el
+  sistema exige crear el rol y la base a mano, con los permisos correctos.
+- **Aislamiento del entorno del anfitrión.** Este proyecto se encontró con **tres
+  PostgreSQL compitiendo por el puerto 5432** —uno de Postgres.app, uno de
+  Homebrew levantado por un LaunchAgent, y el contenedor—. En macOS, un socket
+  ligado a una dirección específica gana sobre uno ligado a comodín, así que las
+  conexiones a `localhost` llegaban a un motor distinto del previsto, con un
+  esquema distinto. El contenedor elimina esa clase de ambigüedad.
+- **Persistencia en volumen nombrado.** `pgdata` sobrevive a reinicios y
+  recreaciones del contenedor. Durante el desarrollo, un clúster de Postgres
+  instalado en el sistema se reinicializó y se llevó el rol y los datos; el
+  volumen de Docker no tiene ese modo de falla.
+- **Healthcheck declarado.** `pg_isready` marca el contenedor como *healthy*
+  recién cuando la base acepta conexiones, lo que da una señal confiable de
+  cuándo es seguro arrancar la API, en lugar de esperar una cantidad arbitraria
+  de segundos.
+- **Un comando para levantar y otro para descartar.** `docker compose up -d`
+  reproduce el entorno; `docker compose down -v` lo borra por completo. Poder
+  volver a un estado limpio y conocido hace que los problemas sean
+  reproducibles.
+
+La base de datos se contiene, pero **la API y el frontend se ejecutan en el
+anfitrión**. Contenerizarlos también agregaría reconstrucción de imágenes y
+montaje de volúmenes al ciclo de edición, a cambio de un aislamiento que en este
+proyecto no hace falta: es donde el costo de la herramienta superaría su
+beneficio.
 
 ## Por qué esta arquitectura, y por qué no hexagonal
 
