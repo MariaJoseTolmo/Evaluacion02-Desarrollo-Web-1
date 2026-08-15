@@ -55,6 +55,18 @@ Nest corre **sobre** Express (`@nestjs/platform-express`), así que no se
 renuncia ni al rendimiento ni al ecosistema de middleware: se agrega estructura
 sobre la misma base.
 
+> **En este proyecto** — `api/src/projects/projects.controller.ts:25`
+>
+> ```ts
+> @Controller('projects')
+> @UseGuards(JwtAuthGuard)   // cubre todas las rutas de abajo
+> ```
+>
+> Cuando se agregó `@Patch(':id')` para editar proyectos, no hizo falta escribir
+> ni una línea de autenticación: el endpoint nació protegido. Con middleware
+> montado por ruta, olvidarse no produce un error visible — produce una ruta
+> abierta.
+
 ### TypeScript de punta a punta
 
 El beneficio concreto es que **el contrato de la API se verifica en tiempo de
@@ -65,6 +77,17 @@ en el frontend deja de compilar; sin tipos, el mismo cambio se descubre como un
 Además, el compilador es requisito técnico del resto del stack: el sistema de
 decoradores de Nest y de TypeORM depende de la emisión de metadatos de tipos, que
 solo existe compilando TypeScript.
+
+> **En este proyecto** — `web/src/api.ts:19`
+>
+> ```ts
+> export async function api<T>(path: string, …): Promise<T>
+> ```
+>
+> `Profile.tsx` la consume como `api<AuthUser>('/users/me')`. Si la API dejara de
+> devolver `nombre`, el frontend **deja de compilar**. Sin tipos, el mismo cambio
+> se vería como un "Sesión de undefined" en pantalla, y sólo si alguien entra a
+> esa vista.
 
 ### TypeORM
 
@@ -88,6 +111,23 @@ solo existe compilando TypeScript.
   arrancar, lo que elimina el paso manual de creación de tablas al clonar el
   proyecto. Es una elección apropiada para esta etapa; un despliegue real usaría
   migraciones versionadas.
+
+> **En este proyecto** — `api/src/users/user.entity.ts:23`
+>
+> ```ts
+> @Column({ length: 60, select: false })
+> clave: string;
+> ```
+>
+> `GET /api/auth/me` hace un `findOne` y devuelve el usuario completo, y aun así
+> **nunca filtra el hash**. El único lugar que lo pide es el login, y lo hace de
+> forma explícita con `select: { clave: true }`. No hay que acordarse de borrar
+> el campo en cada respuesta: no viene.
+>
+> El otro caso es `api/src/projects/project.entity.ts:45`, donde un `transformer`
+> convierte `numeric` a número. Por eso `monto` llega al cliente como `15750000`
+> y no como `"15750000.00"`, resuelto **en un solo lugar** en vez de en cada
+> consumidor del campo.
 
 ### PostgreSQL
 
@@ -113,6 +153,20 @@ desde la aplicación**:
   ocurren dentro de una transacción: si una sincronización falla a la mitad, no
   queda un esquema parcialmente aplicado.
 
+> **En este proyecto** — `api/src/auth/auth.service.ts:33-42`
+>
+> ```ts
+> await this.users.save(user);          // no consulta antes
+> } catch (error) {
+>   if (error.code === '23505') throw new ConflictException(…)
+> ```
+>
+> El registro **no pregunta si el correo ya existe**: inserta y atrapa el error
+> del motor. Si dos personas se registran con el mismo correo en el mismo
+> instante, un "consulto y después inserto" deja pasar a las dos, porque entre la
+> consulta y la inserción hay una ventana. La restricción `UNIQUE` no tiene esa
+> ventana.
+
 ### bcrypt para las claves
 
 La elección de bcrypt sobre un hash de propósito general —SHA-256, MD5— responde
@@ -131,13 +185,39 @@ bcrypt aporta dos mecanismos específicos:
   con la misma clave producen hashes distintos, lo que anula las tablas
   precalculadas, y no hace falta una columna aparte para la sal.
 
+> **En este proyecto** — `api/src/auth/auth.service.ts:23,56`
+>
+> ```ts
+> const DUMMY_HASH = bcrypt.hashSync('unknown-user', config.bcryptRounds);
+> const valid = await bcrypt.compare(dto.clave, user?.clave ?? DUMMY_HASH);
+> ```
+>
+> Si el correo no existe, el login compara igual contra un hash descartable. La
+> razón es que el costo de bcrypt es medible: si la función saliera antes al no
+> encontrar al usuario, **un correo inexistente respondería más rápido que una
+> clave incorrecta**, y con un cronómetro se podría averiguar qué correos están
+> registrados. Comparar siempre iguala los tiempos.
+
 ### JWT para la sesión
 
-El frontend es una SPA servida desde un origen distinto al de la API. Un JWT
-firmado permite **verificar la sesión sin estado compartido**: la API valida la
-firma con su secreto y no necesita consultar un almacén de sesiones en cada
-petición. Eso elimina un componente de infraestructura y hace que la API sea
-horizontalmente escalable por construcción.
+El frontend es una SPA: el navegador conserva la sesión y la envía en cada
+petición. Un JWT firmado permite **verificar esa sesión sin estado compartido**:
+la API valida la firma con su secreto y no necesita consultar un almacén de
+sesiones. Eso elimina un componente de infraestructura y hace que la API sea
+horizontalmente escalable por construcción, porque cualquier instancia puede
+atender cualquier petición sin coordinarse con las demás.
+
+> **En este proyecto** — `api/src/auth/jwt-auth.guard.ts:32-35`
+>
+> ```ts
+> const payload = await this.jwt.verifyAsync(token);
+> request.user = { id: payload.sub, correo: payload.correo };
+> ```
+>
+> Los controladores filtran por `req.user.id`, que sale del **token verificado y
+> nunca de la URL**. Por eso la edición de perfil es `PATCH /api/users/me` y no
+> `PATCH /api/users/:id`: no existe un parámetro donde mentir. Lo mismo en
+> proyectos, donde listar, editar y borrar filtran por `createdById`.
 
 ### class-validator y `ValidationPipe`
 
@@ -151,6 +231,18 @@ opciones concretas hacen el trabajo pesado:
   vez de ignorarlas en silencio, así un cliente mal construido falla de forma
   ruidosa y temprana.
 
+> **En este proyecto** — `api/src/users/user.dto.ts:38`
+>
+> ```ts
+> @ValidateIf((dto) => dto.claveNueva !== undefined)
+> claveActual?: string;
+> ```
+>
+> `claveActual` es opcional, salvo que se esté cambiando la clave: ahí pasa a ser
+> obligatoria. Esa regla condicional queda declarada junto al campo, en lugar de
+> ser un `if` perdido dentro del service. Y gracias a `whitelist`, un cuerpo que
+> incluya `{"id": 999}` nunca llega a la entidad.
+
 ### React con Vite
 
 Vite sirve los módulos como **ESM nativo** en desarrollo, sin empaquetar todo el
@@ -161,7 +253,23 @@ inmediata.
 El `server.proxy` de Vite reenvía `/api` al backend, de modo que en desarrollo el
 navegador ve **un solo origen**. Eso elimina las peticiones *preflight* de CORS
 del circuito de trabajo y hace que las rutas relativas del cliente funcionen sin
-configuración distinta entre desarrollo y producción.
+configuración distinta entre desarrollo y producción, donde el mismo rol lo
+cumple nginx.
+
+> **En este proyecto** — `web/src/projects/Projects.tsx:73`
+>
+> ```ts
+> if (editingId === null) { …POST } else { …PATCH }
+> ```
+>
+> Un único formulario sirve para crear y editar: el estado decide el verbo HTTP,
+> el encabezado (`Nuevo proyecto` / `Editar proyecto`) y la etiqueta del botón
+> (`Crear` / `Guardar`). Un modal aparte habría duplicado los cinco campos y sus
+> validaciones para obtener el mismo resultado.
+>
+> Y en `web/Dockerfile:4,15`, Vite existe **sólo durante la compilación**: la
+> imagen final es nginx con los estáticos adentro y pesa **48.7 MB**, sin Node ni
+> `node_modules`.
 
 ### Bootstrap
 
@@ -170,6 +278,17 @@ contraste resueltos por la librería. Escribir esos mismos componentes a mano no
 es solo más lento, es más propenso a producir formularios que un lector de
 pantalla no puede recorrer. Como se consume compilado desde npm, tampoco agrega
 un paso de compilación de estilos al proyecto.
+
+> **En este proyecto** — `web/src/auth/Login.tsx:36`
+>
+> ```tsx
+> <div className="alert alert-danger py-2" role="alert">
+> ```
+>
+> Ese `role="alert"` hace que un lector de pantalla **anuncie el error de login
+> apenas aparece**, sin que la persona tenga que salir a buscarlo por la página.
+> Es exactamente el tipo de detalle que se pierde al escribir la alerta a mano:
+> visualmente el resultado sería idéntico y el problema pasaría inadvertido.
 
 ### Docker para toda la aplicación
 
@@ -241,6 +360,18 @@ reemplaza:
   disco ese archivo no existe: sin esta regla, la aplicación sólo funcionaría
   entrando por la raíz.
 
+> **En este proyecto** — `web/nginx.conf:24`
+>
+> ```nginx
+> try_files $uri $uri/ /index.html;
+> ```
+>
+> Sin esa línea, entrar directo a <http://localhost:8080/perfil> o recargar esa
+> página devuelve **404**. En desarrollo el problema no se ve, porque el servidor
+> de Vite ya hace ese fallback; aparece recién al servir el build con un servidor
+> web real. Se comprueba con `curl -o /dev/null -w '%{http_code}'
+> http://localhost:8080/perfil`, que debe responder `200`.
+
 #### Resolución por nombre de servicio
 
 Dentro de la red de Compose, cada servicio se resuelve por su nombre: la API se
@@ -249,6 +380,20 @@ conecta a `db:5432` y nginx reenvía a `api:3001`. Ningún contenedor usa
 `localhost`**. Esa red interna es también lo que vuelve irrelevante el conflicto
 de puertos del anfitrión descrito arriba: el tráfico entre servicios nunca pasa
 por el puerto 5432 de la máquina.
+
+> **En este proyecto** — `docker-compose.yml:29,45`
+>
+> ```yaml
+> DB_HOST: db                            # no "localhost"
+> depends_on:
+>   db: { condition: service_healthy }   # espera a que ACEPTE conexiones
+> ```
+>
+> Durante el desarrollo, el PostgreSQL de Homebrew arrancó solo —vía LaunchAgent—
+> y volvió a tomar el puerto 5432 del anfitrión, rompiendo la verificación que
+> corría desde afuera. A los servicios del stack no les afectó en absoluto: se
+> hablan por la red interna. Esa es la diferencia práctica entre depender del
+> entorno de la máquina y no depender de él.
 
 ## Por qué esta arquitectura, y por qué no hexagonal
 
