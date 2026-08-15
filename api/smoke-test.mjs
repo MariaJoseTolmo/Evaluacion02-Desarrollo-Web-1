@@ -1,7 +1,12 @@
 /**
  * End-to-end smoke test against a running API.
- *   1. npm start        (in another terminal)
- *   2. node smoke-test.mjs
+ *
+ * Con el stack en Docker (recomendado):
+ *   docker compose exec api node smoke-test.mjs
+ *
+ * Contra procesos locales:
+ *   npm start   (en otra terminal)
+ *   npm test
  *
  * Verifies registration hashing, login, JWT issuance, and guard enforcement.
  */
@@ -11,6 +16,20 @@ import { Client } from 'pg';
 const BASE = process.env.API_URL ?? 'http://localhost:3001/api';
 const correo = `smoke.${Date.now()}@techsolutions.cl`;
 const clave = 'ClaveSegura123';
+
+/**
+ * Reads the same variables the API uses, so the test always inspects the very
+ * database the API wrote to. Hardcoding `localhost` here would silently query a
+ * different PostgreSQL if the host has one of its own on port 5432.
+ */
+const newDbClient = () =>
+  new Client({
+    host: process.env.DB_HOST ?? 'localhost',
+    port: Number(process.env.DB_PORT ?? 5432),
+    user: process.env.DB_USERNAME ?? 'root',
+    password: process.env.DB_PASSWORD ?? 'desarrollo_software_1',
+    database: process.env.DB_DATABASE ?? 'desarrollo_software_1',
+  });
 
 const call = async (path, options = {}) => {
   const response = await fetch(`${BASE}${path}`, {
@@ -35,17 +54,17 @@ assert.ok(registered.body.access_token, 'register should return a JWT');
 assert.equal(registered.body.user.clave, undefined, 'password must not be returned');
 
 // 2. The stored password is a bcrypt hash, not plain text.
-const db = new Client({
-  host: 'localhost',
-  port: 5432,
-  user: 'root',
-  password: 'desarrollo_software_1',
-  database: 'desarrollo_software_1',
-});
+const db = newDbClient();
 await db.connect();
 const { rows } = await db.query('SELECT clave FROM usuarios WHERE correo = $1', [correo]);
 await db.end();
-assert.equal(rows.length, 1, 'user should be persisted');
+assert.equal(
+  rows.length,
+  1,
+  `user should be persisted — si esto falla justo después de un registro exitoso, ` +
+    `probablemente este test esté consultando un PostgreSQL distinto del que usa la API ` +
+    `(DB_HOST=${process.env.DB_HOST ?? 'localhost'})`,
+);
 assert.notEqual(rows[0].clave, clave, 'password must not be stored in plain text');
 assert.match(rows[0].clave, /^\$2[aby]\$\d{2}\$/, 'password must be a bcrypt hash');
 
@@ -223,13 +242,7 @@ assert.equal(
   'the new password should work',
 );
 
-const db2 = new Client({
-  host: 'localhost',
-  port: 5432,
-  user: 'root',
-  password: 'desarrollo_software_1',
-  database: 'desarrollo_software_1',
-});
+const db2 = newDbClient();
 await db2.connect();
 const updated = await db2.query('SELECT clave FROM usuarios WHERE correo = $1', [nuevoCorreo]);
 await db2.end();

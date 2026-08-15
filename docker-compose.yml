@@ -8,6 +8,7 @@ services:
       POSTGRES_USER: root
       POSTGRES_PASSWORD: desarrollo_software_1
     ports:
+      # Publicado para poder inspeccionar la base con psql desde el anfitrión.
       - '5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -16,6 +17,54 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  api:
+    build: ./api
+    container_name: eva02_api
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+      # Dentro de la red de Compose, la base se resuelve por el nombre del
+      # servicio. No es "localhost": cada contenedor tiene el suyo.
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USERNAME: root
+      DB_PASSWORD: desarrollo_software_1
+      DB_DATABASE: desarrollo_software_1
+      DB_SYNCHRONIZE: 'true'
+      CORS_ORIGIN: http://localhost:8080
+      JWT_SECRET: change-me-in-production
+      JWT_EXPIRES_IN: 1d
+      BCRYPT_ROUNDS: '10'
+    ports:
+      # Publicado para poder correr el smoke test desde el anfitrión.
+      - '3001:3001'
+    depends_on:
+      db:
+        # Espera a que la base acepte conexiones, no a que el contenedor exista.
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/api/auth/me').then(()=>process.exit(0)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build: ./web
+    container_name: eva02_web
+    restart: unless-stopped
+    ports:
+      - '8080:80'
+    depends_on:
+      api:
+        condition: service_healthy
 
 volumes:
   pgdata:

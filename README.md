@@ -171,14 +171,16 @@ es solo más lento, es más propenso a producir formularios que un lector de
 pantalla no puede recorrer. Como se consume compilado desde npm, tampoco agrega
 un paso de compilación de estilos al proyecto.
 
-### Docker para la base de datos
+### Docker para toda la aplicación
 
-Es la pieza que garantiza que **la base sea idéntica en cualquier máquina**, y en
-este proyecto se justificó en la práctica.
+Es la pieza que garantiza que **el sistema completo sea idéntico en cualquier
+máquina**. Los tres servicios —base, API y frontend— corren en contenedores, así
+que el único requisito para ejecutar el proyecto es tener Docker: no hace falta
+instalar Node ni PostgreSQL, ni que coincidan las versiones.
 
-- **Versión fijada.** `postgres:16-alpine` clava el motor. No depende de qué
-  versión tenga instalada quien clone el repositorio, y evita diferencias de
-  comportamiento entre versiones mayores.
+- **Versión fijada en cada capa.** `postgres:16-alpine`, `node:22-alpine` y
+  `nginx:1.27-alpine` clavan el motor, el runtime y el servidor web. El
+  comportamiento no depende de qué tenga instalado quien clone el repositorio.
 - **Las credenciales que exige el enunciado, declaradas en el compose.** La base
   `desarrollo_software_1`, el usuario `root` y su clave se crean al primer
   arranque del contenedor. Reproducir eso sobre un PostgreSQL instalado en el
@@ -193,20 +195,60 @@ este proyecto se justificó en la práctica.
   recreaciones del contenedor. Durante el desarrollo, un clúster de Postgres
   instalado en el sistema se reinicializó y se llevó el rol y los datos; el
   volumen de Docker no tiene ese modo de falla.
-- **Healthcheck declarado.** `pg_isready` marca el contenedor como *healthy*
-  recién cuando la base acepta conexiones, lo que da una señal confiable de
-  cuándo es seguro arrancar la API, en lugar de esperar una cantidad arbitraria
-  de segundos.
+- **Arranque ordenado por estado real, no por tiempo.** Los `healthcheck` y las
+  cláusulas `depends_on: condition: service_healthy` encadenan el arranque: la
+  API espera a que `pg_isready` confirme que la base acepta conexiones, y el
+  frontend espera a que la API responda. Es la diferencia entre esperar a que un
+  servicio **esté listo** y esperar una cantidad arbitraria de segundos con la
+  esperanza de que alcance.
 - **Un comando para levantar y otro para descartar.** `docker compose up -d`
-  reproduce el entorno; `docker compose down -v` lo borra por completo. Poder
-  volver a un estado limpio y conocido hace que los problemas sean
-  reproducibles.
+  reproduce el entorno completo; `docker compose down -v` lo borra. Poder volver
+  a un estado limpio y conocido hace que los problemas sean reproducibles.
 
-La base de datos se contiene, pero **la API y el frontend se ejecutan en el
-anfitrión**. Contenerizarlos también agregaría reconstrucción de imágenes y
-montaje de volúmenes al ciclo de edición, a cambio de un aislamiento que en este
-proyecto no hace falta: es donde el costo de la herramienta superaría su
-beneficio.
+#### Imágenes multi-etapa
+
+Tanto la API como el frontend se construyen en varias etapas, y eso responde a
+un problema concreto: **las herramientas necesarias para compilar no son las
+necesarias para ejecutar**.
+
+- En la **API**, la etapa de compilación instala todas las dependencias, incluido
+  el compilador de TypeScript, y produce `dist/`. La etapa final parte de una
+  imagen limpia, instala sólo dependencias de producción y copia el JavaScript ya
+  compilado. El compilador y las devDependencies no viajan en la imagen final.
+- Las herramientas de compilación nativa (`python3`, `make`, `g++`) que necesita
+  bcrypt en Alpine se instalan, se usan y **se borran en la misma capa**. Si se
+  borraran en una capa posterior, seguirían ocupando espacio en la imagen, porque
+  las capas son inmutables y acumulativas.
+- El contenedor de la API corre como el usuario **`node`**, no como `root`: si
+  alguien lograra ejecutar código dentro del contenedor, no tendría privilegios
+  administrativos sobre él.
+- En el **frontend**, Node sólo existe durante la compilación. La imagen final es
+  `nginx:1.27-alpine` con los archivos estáticos adentro — un servidor web y
+  HTML, sin Node ni `node_modules` en producción.
+
+#### nginx como servidor y proxy
+
+En desarrollo, Vite resuelve dos cosas que en producción no existen, y nginx las
+reemplaza:
+
+- **Proxy de `/api` hacia el contenedor de la API.** El navegador ve un único
+  origen, así que no hay peticiones cruzadas ni CORS que configurar. El código
+  del cliente usa rutas relativas (`fetch('/api/projects')`) y funciona igual en
+  desarrollo y en producción.
+- **Fallback de historial para el router.** `try_files $uri $uri/ /index.html`
+  hace que entrar directo a `/perfil`, o recargar esa página, devuelva la SPA en
+  vez de un 404. React Router resuelve la ruta del lado del cliente, pero en
+  disco ese archivo no existe: sin esta regla, la aplicación sólo funcionaría
+  entrando por la raíz.
+
+#### Resolución por nombre de servicio
+
+Dentro de la red de Compose, cada servicio se resuelve por su nombre: la API se
+conecta a `db:5432` y nginx reenvía a `api:3001`. Ningún contenedor usa
+`localhost` para hablar con otro, porque **cada contenedor tiene su propio
+`localhost`**. Esa red interna es también lo que vuelve irrelevante el conflicto
+de puertos del anfitrión descrito arriba: el tráfico entre servicios nunca pasa
+por el puerto 5432 de la máquina.
 
 ## Por qué esta arquitectura, y por qué no hexagonal
 
@@ -283,9 +325,10 @@ suyo: entidad, DTOs, controlador y, sólo si hay lógica no trivial, un service.
 
 ```
 eva02/
-├── docker-compose.yml          # PostgreSQL con las credenciales de la evaluación
+├── docker-compose.yml          # Orquesta los tres servicios: db, api, web
 ├── api/
-│   ├── .env                    # Variables de entorno (único lugar de config)
+│   ├── Dockerfile              # Multi-etapa: compila TS, ejecuta sólo dist/
+│   ├── .env                    # Variables de entorno (sólo para uso sin Docker)
 │   ├── smoke-test.mjs          # Verificación end-to-end
 │   └── src/
 │       ├── config.ts           # Un solo archivo de configuración
@@ -309,6 +352,8 @@ eva02/
 │           ├── projects.controller.ts  # Usa el repositorio del ORM directo
 │           └── projects.module.ts
 └── web/
+    ├── Dockerfile              # Multi-etapa: compila con Vite, sirve con nginx
+    ├── nginx.conf              # Proxy a la API + fallback del router
     └── src/
         ├── api.ts              # Cliente HTTP + manejo del token
         ├── App.tsx             # Rutas y protección de rutas
@@ -352,43 +397,74 @@ Resumen puntual de cómo se aplica el razonamiento de
 
 ## Puesta en marcha
 
-### 1. Base de datos
+### Con Docker (recomendado)
 
-Con Docker:
+La aplicación completa —base de datos, API y frontend— corre en contenedores. Es
+el único requisito tener Docker instalado: no hace falta Node, ni PostgreSQL, ni
+crear archivos `.env`.
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
-O con un PostgreSQL local ya instalado:
+| Servicio | URL                              | Contenedor  |
+| -------- | -------------------------------- | ----------- |
+| Frontend | <http://localhost:8080>          | `eva02_web` |
+| API      | <http://localhost:8080/api>      | `eva02_api` |
+| Base     | `localhost:5432`                 | `eva02_db`  |
+
+Los servicios arrancan encadenados por *healthcheck*: la API espera a que la base
+acepte conexiones y el frontend espera a que la API responda, así que cuando el
+comando termina el sistema está listo. TypeORM crea las tablas al arrancar
+(`DB_SYNCHRONIZE=true`).
+
+Verificar el despliegue:
 
 ```bash
+docker compose exec api node smoke-test.mjs
+```
+
+Otros comandos útiles:
+
+```bash
+docker compose logs -f api     # seguir los logs de la API
+docker compose ps              # estado y salud de cada servicio
+docker compose down            # detener, conservando los datos
+docker compose down -v         # detener y borrar también la base
+```
+
+### Sin Docker (desarrollo local)
+
+Útil para trabajar con recarga en caliente. Requiere Node 22 y un PostgreSQL
+propio.
+
+```bash
+# 1. Base de datos: crear rol y base con las credenciales del enunciado
 psql -d postgres -c "CREATE ROLE root LOGIN PASSWORD 'desarrollo_software_1' CREATEDB;"
 psql -d postgres -c "CREATE DATABASE desarrollo_software_1 OWNER root;"
+
+# 2. API — crear api/.env con la sección Variables de entorno
+cd api && npm install && npm run dev    # http://localhost:3001/api
+
+# 3. Frontend
+cd web && npm install && npm run dev    # http://localhost:5173
 ```
 
-### 2. API
-
-Creá el archivo `api/.env` con el contenido de la sección
-[Variables de entorno](#variables-de-entorno-apienv) y luego:
-
-```bash
-cd api
-npm install
-npm start          # http://localhost:3001/api
-```
-
-TypeORM crea las tablas al arrancar (`DB_SYNCHRONIZE=true`).
-
-### 3. Frontend
-
-```bash
-cd web
-npm install
-npm run dev        # http://localhost:5173
-```
+> **Atención con el puerto 5432.** Si el sistema ya tiene un PostgreSQL propio
+> —Postgres.app, Homebrew— va a competir con el contenedor por ese puerto. En
+> macOS gana el que se liga a una dirección específica sobre el que usa comodín,
+> así que las conexiones a `localhost` pueden terminar en un motor distinto del
+> esperado. Se comprueba con `lsof -nP -iTCP:5432 -sTCP:LISTEN`; con el stack en
+> Docker el problema no existe, porque los contenedores se comunican por la red
+> interna de Compose.
 
 ## Variables de entorno (`api/.env`)
+
+Con Docker **no hace falta crear este archivo**: los valores están declarados en
+el servicio `api` de `docker-compose.yml`, con `DB_HOST: db` para resolver la
+base por el nombre del servicio dentro de la red de Compose.
+
+El bloque siguiente corresponde a la ejecución local sin contenedores:
 
 ```
 PORT=3001
@@ -464,12 +540,21 @@ BCRYPT_ROUNDS=10
 
 ## Verificación
 
-Con la API corriendo:
+Con el stack en Docker:
 
 ```bash
-cd api
-npm test
+docker compose exec api node smoke-test.mjs
 ```
+
+Sin Docker, con la API corriendo localmente:
+
+```bash
+cd api && npm test
+```
+
+El test lee la configuración de la base de las mismas variables de entorno que
+usa la API, de modo que siempre inspecciona **la base a la que la API escribió**
+y no otra que pueda estar escuchando en el mismo puerto.
 
 Cubre: registro, hash bcrypt real en la base, correo duplicado (409), login
 correcto e incorrecto, rechazo sin token y con token inválido, validación de
