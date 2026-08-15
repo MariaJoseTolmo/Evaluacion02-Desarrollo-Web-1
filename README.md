@@ -11,7 +11,7 @@ API REST con **NestJS + TypeORM + PostgreSQL** y SPA con **React + Bootstrap**.
 | Backend   | NestJS 11 (sobre Express), TypeScript                  |
 | ORM       | TypeORM 0.3                                            |
 | Base      | PostgreSQL 16                                          |
-| Auth      | JWT (`@nestjs/jwt`) + bcrypt                           |
+| Auth      | JWT (`@nestjs/jwt`) + Argon2id                         |
 | Validación| class-validator (en el borde: DTOs del handler)        |
 | Frontend  | React 19, Vite, React Router, Bootstrap 5              |
 
@@ -112,10 +112,10 @@ solo existe compilando TypeScript.
   proyecto. Es una elección apropiada para esta etapa; un despliegue real usaría
   migraciones versionadas.
 
-> **En este proyecto** — `api/src/users/user.entity.ts:23`
+> **En este proyecto** — `api/src/users/user.entity.ts:28`
 >
 > ```ts
-> @Column({ length: 60, select: false })
+> @Column({ length: 255, select: false })
 > clave: string;
 > ```
 >
@@ -167,36 +167,66 @@ desde la aplicación**:
 > consulta y la inserción hay una ventana. La restricción `UNIQUE` no tiene esa
 > ventana.
 
-### bcrypt para las claves
+### Argon2id para las claves
 
-La elección de bcrypt sobre un hash de propósito general —SHA-256, MD5— responde
-a que **son herramientas para problemas distintos**. SHA está diseñado para ser
-rápido, que es exactamente la propiedad que no se quiere al almacenar
-credenciales: la velocidad favorece al atacante que prueba millones de
-combinaciones por segundo contra una base filtrada.
+Primero, por qué no un hash de propósito general —SHA-256, MD5—: **son
+herramientas para problemas distintos**. SHA está diseñado para ser rápido, que
+es exactamente la propiedad que no se quiere al almacenar credenciales, porque la
+velocidad favorece a quien prueba millones de combinaciones por segundo contra
+una base filtrada.
 
-bcrypt aporta dos mecanismos específicos:
+Segundo, por qué Argon2id y no bcrypt, que también es un hash de contraseñas
+legítimo. Argon2 **ganó la Password Hashing Competition en 2015** y es la primera
+recomendación de OWASP para aplicaciones nuevas. La diferencia técnica que
+justifica la elección es que Argon2 es **memory-hard**:
 
-- **Factor de costo configurable** (`BCRYPT_ROUNDS`, aquí 10). El trabajo es
-  exponencial en ese parámetro, así que el algoritmo se puede encarecer a medida
-  que el hardware mejora, sin cambiar de tecnología.
-- **Salt único por hash, embebido en el resultado.** El formato
-  `$2b$10$<salt><hash>` guarda el costo y la sal junto al digest. Dos usuarios
-  con la misma clave producen hashes distintos, lo que anula las tablas
-  precalculadas, y no hace falta una columna aparte para la sal.
+- **bcrypt es caro en CPU pero barato en memoria** (~4 KiB por hash). Eso permite
+  que una GPU con miles de núcleos, o un ASIC diseñado a medida, calculen muchos
+  hashes en paralelo a un costo muy bajo por unidad.
+- **Argon2id exige una cantidad configurable de memoria por hash** —aquí 19 MiB—
+  y esa memoria no se puede compartir entre cálculos simultáneos. Paralelizar
+  deja de ser barato: mil intentos en paralelo requieren mil veces esa memoria,
+  no mil núcleos. Es un límite físico, no algorítmico.
+- La variante **id** combina Argon2i y Argon2d, de modo que resiste tanto los
+  ataques de canal lateral por tiempo de acceso como los de compromiso
+  tiempo-memoria. Es la variante recomendada cuando no hay una razón concreta
+  para elegir otra.
 
-> **En este proyecto** — `api/src/auth/auth.service.ts:23,56`
+Los tres parámetros son configurables (`ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`,
+`ARGON2_PARALLELISM`) y sus valores por defecto siguen la línea base de OWASP:
+19 MiB, 2 iteraciones, 1 carril. **El costo de memoria es la primera perilla a
+subir** a medida que mejora el hardware, porque es la que sostiene la resistencia
+al paralelismo.
+
+Como bcrypt, Argon2 genera una **sal única por hash y la embebe en el resultado**,
+junto con los parámetros usados:
+
+```
+$argon2id$v=19$m=19456,p=1,t=2$/Ud8eO37sPSMJrDan34uQA$ee4yWtEljcipSVL54b3BwCZTE62iLAihg7FUPlENmnQ
+```
+
+Dos usuarios con la misma clave producen hashes distintos, lo que anula las
+tablas precalculadas, y no hace falta una columna aparte para la sal. Que los
+parámetros viajen dentro del hash permite además subirlos en el futuro sin
+invalidar los hashes ya existentes: cada uno se verifica con los suyos.
+
+> **En este proyecto** — `api/src/auth/auth.service.ts:30,65`
 >
 > ```ts
-> const DUMMY_HASH = bcrypt.hashSync('unknown-user', config.bcryptRounds);
-> const valid = await bcrypt.compare(dto.clave, user?.clave ?? DUMMY_HASH);
+> const dummyHash = argon2.hash('unknown-user', ARGON2_OPTIONS);
+> const valid = await argon2.verify(user?.clave ?? (await dummyHash), dto.clave);
 > ```
 >
 > Si el correo no existe, el login compara igual contra un hash descartable. La
-> razón es que el costo de bcrypt es medible: si la función saliera antes al no
+> razón es que el costo de Argon2 es medible: si la función saliera antes al no
 > encontrar al usuario, **un correo inexistente respondería más rápido que una
 > clave incorrecta**, y con un cronómetro se podría averiguar qué correos están
-> registrados. Comparar siempre iguala los tiempos.
+> registrados. Comparar siempre iguala los tiempos —medido: ~40 ms contra ~37 ms—.
+>
+> Dos detalles propios de Argon2 frente a bcrypt: no tiene API síncrona, así que
+> el hash señuelo es una promesa resuelta una vez al arrancar; y `argon2.verify`
+> recibe `(hash, claveEnClaro)`, **al revés que `bcrypt.compare`**. Invertir esos
+> argumentos hace que todo login falle.
 
 ### JWT para la sesión
 
@@ -335,7 +365,7 @@ necesarias para ejecutar**.
   imagen limpia, instala sólo dependencias de producción y copia el JavaScript ya
   compilado. El compilador y las devDependencies no viajan en la imagen final.
 - Las herramientas de compilación nativa (`python3`, `make`, `g++`) que necesita
-  bcrypt en Alpine se instalan, se usan y **se borran en la misma capa**. Si se
+  Argon2 en Alpine se instalan, se usan y **se borran en la misma capa**. Si se
   borraran en una capa posterior, seguirían ocupando espacio en la imagen, porque
   las capas son inmutables y acumulativas.
 - El contenedor de la API corre como el usuario **`node`**, no como `root`: si
@@ -381,7 +411,7 @@ conecta a `db:5432` y nginx reenvía a `api:3001`. Ningún contenedor usa
 de puertos del anfitrión descrito arriba: el tráfico entre servicios nunca pasa
 por el puerto 5432 de la máquina.
 
-> **En este proyecto** — `docker-compose.yml:29,45`
+> **En este proyecto** — `docker-compose.yml:29,47`
 >
 > ```yaml
 > DB_HOST: db                            # no "localhost"
@@ -624,7 +654,9 @@ DB_SYNCHRONIZE=true
 
 JWT_SECRET=change-me-in-production
 JWT_EXPIRES_IN=1d
-BCRYPT_ROUNDS=10
+ARGON2_MEMORY_COST=19456
+ARGON2_TIME_COST=2
+ARGON2_PARALLELISM=1
 ```
 
 ## Modelos
@@ -636,7 +668,7 @@ BCRYPT_ROUNDS=10
 | `id`         | serial PK      |                                |
 | `nombre`     | varchar(120)   |                                |
 | `correo`     | varchar(180)   | **UNIQUE** — identificador     |
-| `clave`      | varchar(60)    | hash bcrypt, `select: false`   |
+| `clave`      | varchar(255)   | hash Argon2id, `select: false` |
 | `created_at` | timestamp      |                                |
 
 ### `proyectos`
@@ -667,9 +699,11 @@ BCRYPT_ROUNDS=10
 
 ## Seguridad
 
-- **Cifrado de clave**: bcrypt con 10 rondas. La clave en texto plano nunca se
-  guarda ni se devuelve; la columna tiene `select: false` para que no salga por
-  accidente en un `find()`.
+- **Cifrado de clave**: Argon2id con 19 MiB de memoria, 2 iteraciones y 1 carril
+  —la línea base de OWASP—. Es *memory-hard*, así que resiste el crackeo por GPU
+  mucho mejor que un algoritmo que sólo cuesta CPU. La clave en texto plano nunca
+  se guarda ni se devuelve; la columna tiene `select: false` para que no salga
+  por accidente en un `find()`.
 - **JWT**: firmado con `JWT_SECRET`, expira en 1 día. `JwtAuthGuard` valida el
   header `Authorization: Bearer <token>` y adjunta el usuario al request.
 - **Login de tiempo constante**: si el correo no existe se compara igual contra un
@@ -701,7 +735,7 @@ El test lee la configuración de la base de las mismas variables de entorno que
 usa la API, de modo que siempre inspecciona **la base a la que la API escribió**
 y no otra que pueda estar escuchando en el mismo puerto.
 
-Cubre: registro, hash bcrypt real en la base, correo duplicado (409), login
+Cubre: registro, hash Argon2id real en la base, correo duplicado (409), login
 correcto e incorrecto, rechazo sin token y con token inválido, validación de
 input (400), creación, listado y edición parcial de proyectos, aislamiento entre
 usuarios, edición del perfil, y cambio de clave con verificación de la actual

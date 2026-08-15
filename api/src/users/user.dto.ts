@@ -32,11 +32,11 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   @MinLength(8)
-  @MaxLength(72)
+  @MaxLength(128)
   claveNueva?: string;
 
   @ValidateIf((dto: UpdateUserDto) => dto.claveNueva !== undefined)
   @IsString()
-  @MaxLength(72)
+  @MaxLength(128)
   claveActual?: string;
 }

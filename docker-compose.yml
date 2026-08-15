@@ -35,7 +35,9 @@ services:
       CORS_ORIGIN: http://localhost:8080
       JWT_SECRET: change-me-in-production
       JWT_EXPIRES_IN: 1d
-      BCRYPT_ROUNDS: '10'
+      ARGON2_MEMORY_COST: '19456'
+      ARGON2_TIME_COST: '2'
+      ARGON2_PARALLELISM: '1'
     ports:
       # Publicado para poder correr el smoke test desde el anfitrión.
       - '3001:3001'

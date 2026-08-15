@@ -33,5 +33,15 @@ export const config = {
     // `ms`-style duration string, e.g. '1d', '12h', '30m'.
     expiresIn: (process.env.JWT_EXPIRES_IN ?? '1d') as `${number}${'s' | 'm' | 'h' | 'd'}`,
   },
-  bcryptRounds: Number(process.env.BCRYPT_ROUNDS ?? 10),
+  /**
+   * Argon2id parameters. Defaults follow the OWASP Password Storage baseline:
+   * 19 MiB of memory, 2 iterations, 1 lane. Memory cost is what makes the
+   * algorithm resistant to GPU and ASIC cracking, so it is the knob to raise
+   * first as hardware improves.
+   */
+  argon2: {
+    memoryCost: Number(process.env.ARGON2_MEMORY_COST ?? 19456), // KiB
+    timeCost: Number(process.env.ARGON2_TIME_COST ?? 2),
+    parallelism: Number(process.env.ARGON2_PARALLELISM ?? 1),
+  },
 };

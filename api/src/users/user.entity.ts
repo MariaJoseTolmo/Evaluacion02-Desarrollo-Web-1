@@ -19,8 +19,13 @@ export class User {
   @Column({ length: 180, unique: true })
   correo: string;
 
-  /** bcrypt hash — never the plain password, and excluded from default selects. */
-  @Column({ length: 60, select: false })
+  /**
+   * Argon2id hash — never the plain password, and excluded from default
+   * selects. El formato codificado (`$argon2id$v=19$m=...,t=...,p=...$sal$hash`)
+   * ocupa ~97 caracteres con los parámetros actuales; 255 deja margen para
+   * subirlos sin migrar la columna.
+   */
+  @Column({ length: 255, select: false })
   clave: string;
 
   @CreateDateColumn({ name: 'created_at' })

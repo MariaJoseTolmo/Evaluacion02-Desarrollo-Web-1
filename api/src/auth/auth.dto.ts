@@ -19,7 +19,7 @@ export class RegisterDto {
 
   @IsString()
   @MinLength(8)
-  @MaxLength(72) // bcrypt truncates beyond 72 bytes
+  @MaxLength(128) // Argon2 no trunca; el tope sólo acota el trabajo por petición
   clave: string;
 }
 
@@ -30,6 +30,6 @@ export class LoginDto {
   correo: string;
 
   @IsString()
-  @MaxLength(72)
+  @MaxLength(128)
   clave: string;
 }

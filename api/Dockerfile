@@ -4,8 +4,8 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 
-# bcrypt trae un addon nativo y no publica binario precompilado para musl,
-# así que en Alpine hay que compilarlo.
+# argon2 trae un addon nativo; si no hay binario precompilado para musl,
+# node-gyp lo compila en esta etapa.
 RUN apk add --no-cache python3 make g++
 
 COPY package.json package-lock.json ./

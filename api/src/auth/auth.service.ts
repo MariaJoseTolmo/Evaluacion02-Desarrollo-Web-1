@@ -6,7 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { Repository } from 'typeorm';
-import * as bcrypt from 'bcrypt';
+import * as argon2 from 'argon2';
 import { User } from '../users/user.entity';
 import { config } from '../config';
 import { LoginDto, RegisterDto } from './auth.dto';
@@ -19,8 +19,15 @@ export type AuthResult = {
 
 const UNIQUE_VIOLATION = '23505';
 
-/** Compared against when the email is unknown, to keep login timing uniform. */
-const DUMMY_HASH = bcrypt.hashSync('unknown-user', config.bcryptRounds);
+/** Argon2id: memory-hard, so cracking cannot be parallelised cheaply on GPUs. */
+export const ARGON2_OPTIONS = { type: argon2.argon2id, ...config.argon2 } as const;
+
+/**
+ * Compared against when the email is unknown, to keep login timing uniform.
+ * Argon2 has no synchronous API, so this is a promise resolved once at startup
+ * rather than a value.
+ */
+const dummyHash = argon2.hash('unknown-user', ARGON2_OPTIONS);
 
 @Injectable()
 export class AuthService {
@@ -30,7 +37,7 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthResult> {
-    const clave = await bcrypt.hash(dto.clave, config.bcryptRounds);
+    const clave = await argon2.hash(dto.clave, ARGON2_OPTIONS);
     const user = this.users.create({ ...dto, clave });
 
     try {
@@ -53,7 +60,9 @@ export class AuthService {
       select: { id: true, nombre: true, correo: true, clave: true },
     });
 
-    const valid = await bcrypt.compare(dto.clave, user?.clave ?? DUMMY_HASH);
+    // Ojo con el orden: argon2.verify recibe (hash, claveEnClaro), al revés que
+    // bcrypt.compare(claveEnClaro, hash). Invertirlo hace que todo login falle.
+    const valid = await argon2.verify(user?.clave ?? (await dummyHash), dto.clave);
     if (!user || !valid) {
       throw new UnauthorizedException('Credenciales inválidas');
     }

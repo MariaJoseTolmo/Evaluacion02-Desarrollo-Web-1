@@ -6,10 +6,10 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import * as bcrypt from 'bcrypt';
+import * as argon2 from 'argon2';
 import { User } from './user.entity';
 import { UpdateUserDto } from './user.dto';
-import { config } from '../config';
+import { ARGON2_OPTIONS } from '../auth/auth.service';
 
 const UNIQUE_VIOLATION = '23505';
 
@@ -28,9 +28,9 @@ export class UsersService {
     if (!user) throw new NotFoundException('Usuario no encontrado');
 
     if (dto.claveNueva) {
-      const valid = await bcrypt.compare(dto.claveActual ?? '', user.clave);
+      const valid = await argon2.verify(user.clave, dto.claveActual ?? '');
       if (!valid) throw new UnauthorizedException('La clave actual es incorrecta');
-      user.clave = await bcrypt.hash(dto.claveNueva, config.bcryptRounds);
+      user.clave = await argon2.hash(dto.claveNueva, ARGON2_OPTIONS);
     }
 
     if (dto.nombre !== undefined) user.nombre = dto.nombre;

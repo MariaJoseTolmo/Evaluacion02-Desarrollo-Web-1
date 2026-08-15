@@ -53,7 +53,7 @@ assert.equal(registered.status, 201, `register: ${JSON.stringify(registered.body
 assert.ok(registered.body.access_token, 'register should return a JWT');
 assert.equal(registered.body.user.clave, undefined, 'password must not be returned');
 
-// 2. The stored password is a bcrypt hash, not plain text.
+// 2. The stored password is an Argon2id hash, not plain text.
 const db = newDbClient();
 await db.connect();
 const { rows } = await db.query('SELECT clave FROM usuarios WHERE correo = $1', [correo]);
@@ -66,7 +66,7 @@ assert.equal(
     `(DB_HOST=${process.env.DB_HOST ?? 'localhost'})`,
 );
 assert.notEqual(rows[0].clave, clave, 'password must not be stored in plain text');
-assert.match(rows[0].clave, /^\$2[aby]\$\d{2}\$/, 'password must be a bcrypt hash');
+assert.match(rows[0].clave, /^\$argon2id\$v=19\$/, 'password must be an Argon2id hash');
 
 // 3. Duplicate email is rejected by the unique constraint.
 const duplicate = await call('/auth/register', {
@@ -247,6 +247,10 @@ await db2.connect();
 const updated = await db2.query('SELECT clave FROM usuarios WHERE correo = $1', [nuevoCorreo]);
 await db2.end();
 assert.notEqual(updated.rows[0].clave, claveNueva, 'new password must not be plain text');
-assert.match(updated.rows[0].clave, /^\$2[aby]\$\d{2}\$/, 'new password must be a bcrypt hash');
+assert.match(
+  updated.rows[0].clave,
+  /^\$argon2id\$v=19\$/,
+  'new password must be an Argon2id hash',
+);
 
 console.log('✅ Todas las verificaciones pasaron.');
